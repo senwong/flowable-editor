@@ -814,6 +814,407 @@ export default function FlowableEditor() {
 
   }, [initializeEditor, fetchModelData]);
 
+
+
+
+  const dragStateRef = useRef({
+    dragModeOver: false,
+    quickMenu: false,
+    dragCanContain: false,
+  });
+
+
+  function dropCallback(event, ui) {
+    event.preventDefault();
+    event.persist();
+    console.log('dropCallback ', event);
+    editorManager.handleEvents({
+        type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+        highlightId: "shapeRepo.attached"
+    });
+    editorManager.handleEvents({
+        type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+        highlightId: "shapeRepo.added"
+    });
+
+    editorManager.handleEvents({
+        type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+        highlightId: "shapeMenu"
+    });
+
+    FLOWABLE.eventBus.dispatch(FLOWABLE.eventBus.EVENT_TYPE_HIDE_SHAPE_BUTTONS);
+
+    if (dragStateRef.current.dragCanContain) {
+
+      const draggableId =  event.dataTransfer.getData("draggableId");
+      console.log('draggableId: ', draggableId);
+      // const item = getStencilItemById(ui.draggable[0].id);
+      const item = getStencilItemById(draggableId);
+
+      const pos = {x: event.pageX, y: event.pageY};
+
+      const additionalIEZoom = 1;
+
+      const screenCTM = editorManager.getCanvas().node.getScreenCTM();
+
+      // Correcting the UpperLeft-Offset
+      pos.x -= (screenCTM.e / additionalIEZoom);
+      pos.y -= (screenCTM.f / additionalIEZoom);
+      // Correcting the Zoom-Factor
+      pos.x /= screenCTM.a;
+      pos.y /= screenCTM.d;
+
+      // Correcting the ScrollOffset
+      pos.x -= document.documentElement.scrollLeft;
+      pos.y -= document.documentElement.scrollTop;
+
+      const parentAbs = dragStateRef.current.dragCurrentParent.absoluteXY();
+      pos.x -= parentAbs.x;
+      pos.y -= parentAbs.y;
+
+      let containedStencil;
+      const stencilSets = editorManager.getStencilSets().values();
+      for (let i = 0; i < stencilSets.length; i++) {
+        const stencilSet = stencilSets[i];
+        const nodes = stencilSet.nodes();
+        for (let j = 0; j < nodes.length; j++) {
+          if (nodes[j].idWithoutNs() === draggableId) {
+            containedStencil = nodes[j];
+            break;
+          }
+        }
+
+        if (!containedStencil) {
+          const edges = stencilSet.edges();
+          for (let j = 0; j < edges.length; j++) {
+          if (edges[j].idWithoutNs() === draggableId) {
+            containedStencil = edges[j];
+            break;
+          }
+        }
+      }
+    }
+
+    if (!containedStencil) return;
+
+    if (dragStateRef.current.quickMenu) {
+      const shapes = editorManager.getSelection();
+      if (shapes && shapes.length === 1) {
+        const currentSelectedShape = shapes.first();
+
+        const option = {};
+        option.type = currentSelectedShape.getStencil().namespace() + ui.draggable[0].id;
+        option.namespace = currentSelectedShape.getStencil().namespace();
+        option.connectedShape = currentSelectedShape;
+        option.parent = $scope.dragCurrentParent;
+        option.containedStencil = containedStencil;
+
+        // If the ctrl key is not pressed,
+        // snapp the new shape to the center
+        // if it is near to the center of the other shape
+        if (!event.ctrlKey) {
+          // Get the center of the shape
+          const cShape = currentSelectedShape.bounds.center();
+          // Snapp +-20 Pixel horizontal to the center
+          if (20 > Math.abs(cShape.x - pos.x)) {
+            pos.x = cShape.x;
+          }
+          // Snapp +-20 Pixel vertical to the center
+          if (20 > Math.abs(cShape.y - pos.y)) {
+            pos.y = cShape.y;
+          }
+        }
+
+        option.position = pos;
+
+        if (containedStencil.idWithoutNs() !== 'SequenceFlow' && containedStencil.idWithoutNs() !== 'Association' &&
+                containedStencil.idWithoutNs() !== 'MessageFlow' && containedStencil.idWithoutNs() !== 'DataAssociation') {
+
+          const args = { sourceShape: currentSelectedShape, targetStencil: containedStencil };
+          const targetStencil = editorManager.getRules().connectMorph(args);
+          if (!targetStencil) { // Check if there can be a target shape
+            return;
+          }
+          option.connectingType = targetStencil.id();
+        }
+
+        const command = new FLOWABLE.CreateCommand(option, dragStateRef.current.dropTargetElement, pos, editorManager.getEditor());
+
+        editorManager.executeCommands([command]);
+      }
+
+    } else {
+      let canAttach = false;
+      if (containedStencil.idWithoutNs() === 'BoundaryErrorEvent' || containedStencil.idWithoutNs() === 'BoundaryTimerEvent' ||
+            containedStencil.idWithoutNs() === 'BoundarySignalEvent' || containedStencil.idWithoutNs() === 'BoundaryMessageEvent' ||
+            containedStencil.idWithoutNs() === 'BoundaryCancelEvent' || containedStencil.idWithoutNs() === 'BoundaryCompensationEvent') {
+
+        // Modify position, otherwise boundary event will get position related to left corner of the canvas instead of the container
+        pos = editorManager.eventCoordinates( event );
+        canAttach = true;
+      }
+
+      const modelData = editorManager.getBaseModelData();
+      const option = {};
+      option['type'] = modelData.model.stencilset.namespace + item.id;
+      option['namespace'] = modelData.model.stencilset.namespace;
+      option['position'] = pos;
+      option['parent'] = dragStateRef.dragCurrentParent;
+
+      const commandClass = ORYX.Core.Command.extend({
+            construct: function(option, dockedShape, canAttach, position, facade){
+                this.option = option;
+                this.docker = null;
+                this.dockedShape = dockedShape;
+                this.dockedShapeParent = dockedShape.parent || facade.getCanvas();
+                this.position = position;
+                this.facade = facade;
+                this.selection = this.facade.getSelection();
+                this.shape = null;
+                this.parent = null;
+                this.canAttach = canAttach;
+            },
+            execute: function(){
+                if (!this.shape) {
+                    this.shape = this.facade.createShape(option);
+                    this.parent = this.shape.parent;
+                } else if (this.parent) {
+                    this.parent.add(this.shape);
+                }
+
+                if (this.canAttach && this.shape.dockers && this.shape.dockers.length) {
+                    this.docker = this.shape.dockers[0];
+
+                    this.dockedShapeParent.add(this.docker.parent);
+
+                    // Set the Docker to the new Shape
+                    this.docker.setDockedShape(undefined);
+                    this.docker.bounds.centerMoveTo(this.position);
+                    if (this.dockedShape !== this.facade.getCanvas()) {
+                        this.docker.setDockedShape(this.dockedShape);
+                    }
+                    this.facade.setSelection( [this.docker.parent] );
+                }
+
+                this.facade.getCanvas().update();
+                this.facade.updateSelection();
+
+            },
+            rollback: function(){
+                if (this.shape) {
+                    this.facade.setSelection(this.selection.without(this.shape));
+                    this.facade.deleteShape(this.shape);
+                }
+                if (this.canAttach && this.docker) {
+                    this.docker.setDockedShape(undefined);
+                }
+                this.facade.getCanvas().update();
+                this.facade.updateSelection();
+
+            }
+      });
+
+      // Update canvas
+      const command = new commandClass(option, dragStateRef.current.dragCurrentParent, canAttach, pos, editorManager.getEditor());
+      editorManager.executeCommands([command]);
+
+      // Fire event to all who want to know about this
+      const dropEvent = {
+          type: FLOWABLE.eventBus.EVENT_TYPE_ITEM_DROPPED,
+          droppedItem: item,
+          position: pos
+      };
+      FLOWABLE.eventBus.dispatch(dropEvent.type, dropEvent);
+    }
+  }
+
+  dragStateRef.current.dragCurrentParent = undefined;
+  dragStateRef.current.dragCurrentParentId = undefined;
+  dragStateRef.current.dragCurrentParentStencil = undefined;
+  dragStateRef.current.dragCanContain = undefined;
+  dragStateRef.current.quickMenu = undefined;
+  dragStateRef.current.dropTargetElement = undefined;
+};
+
+
+  function overCallback(event) {
+    event.preventDefault();
+    dragStateRef.current.dragModeOver = true;
+  }
+
+
+  function startDragCallback(event) {
+    dragStateRef.current.dragModeOver = false;
+    dragStateRef.current.quickMenu = false;
+
+    event.dataTransfer.setData("draggableId", event.target.id);
+  }
+
+
+  function dragCallback(event) {
+    if (dragStateRef.current.dragModeOver) {
+
+      const coord = editorManager.eventCoordinatesXY(event.pageX, event.pageY);
+
+
+        const aShapes = editorManager.getCanvas().getAbstractShapesAtPosition(coord);
+        console.log('dragCallback',  aShapes.length);
+        if (aShapes.length <= 0) {
+
+            if (event.helper) {
+              // $scope.dragCanContain = false;
+              dragStateRef.current.dragCanContain = false;
+              return false;
+            }
+        }
+
+        if (aShapes[0] instanceof ORYX.Core.Canvas) {
+            editorManager.getCanvas().setHightlightStateBasedOnX(coord.x);
+        }
+
+        if (aShapes.length === 1 && aShapes[0] instanceof ORYX.Core.Canvas) {
+            const item = getStencilItemById(event.target.id);
+            const parentCandidate = aShapes[0];
+
+            if (item.id === 'Lane'
+              || item.id === 'BoundaryErrorEvent'
+              || item.id === 'BoundaryMessageEvent'
+              || item.id === 'BoundarySignalEvent'
+              || item.id === 'BoundaryTimerEvent'
+              || item.id === 'BoundaryCancelEvent'
+              || item.id === 'BoundaryCompensationEvent'
+              || item.id === 'EntryCriterion'
+            ) {
+
+              dragStateRef.current.dragCanContain = false
+
+              // Show Highlight
+              editorManager.handleEvents({
+                type: ORYX.CONFIG.EVENT_HIGHLIGHT_SHOW,
+                highlightId: 'shapeRepo.added',
+                elements: [parentCandidate],
+                style: ORYX.CONFIG.SELECTION_HIGHLIGHT_STYLE_RECTANGLE,
+                color: ORYX.CONFIG.SELECTION_INVALID_COLOR
+              });
+
+            } else {
+              dragStateRef.current.dragCanContain = true;
+              dragStateRef.current.dragCurrentParent = parentCandidate;
+              dragStateRef.current.dragCurrentParentId = parentCandidate.id;
+
+              editorManager.handleEvents({
+                type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+                highlightId: "shapeRepo.added"
+              });
+            }
+
+            editorManager.handleEvents({
+              type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+              highlightId: "shapeRepo.attached"
+            });
+            return false;
+        }
+
+        const item = getStencilItemById(event.target.id);
+
+        const parentCandidate = aShapes.reverse().find(function (candidate) {
+            return (candidate instanceof ORYX.Core.Canvas
+                || candidate instanceof ORYX.Core.Node
+                || candidate instanceof ORYX.Core.Edge);
+        });
+
+        if (!parentCandidate) {
+          dragStateRef.current.dragCanContain = false;
+          return false;
+        }
+
+        if (item.type === "node") {
+          // check if the draggable is a boundary event and the parent an Activity
+          // eslint-disable-next-line no-underscore-dangle
+          let _canContain = false;
+          const parentStencilId = parentCandidate.getStencil().id();
+
+          if (dragStateRef.current.dragCurrentParent && dragStateRef.current.dragCurrentParent.id === parentCandidate.id) {
+            return false;
+          }
+
+          const parentItem = getStencilItemById(parentCandidate.getStencil().idWithoutNs());
+          if (parentItem.roles.indexOf('Activity') > -1) {
+            if (item.roles.indexOf('IntermediateEventOnActivityBoundary') > -1
+              || item.roles.indexOf('EntryCriterionOnItemBoundary') > -1
+              || item.roles.indexOf('ExitCriterionOnItemBoundary') > -1) {
+              _canContain = true;
+            }
+
+          } else if(parentItem.roles.indexOf('StageActivity') > -1) {
+            if (item.roles.indexOf('EntryCriterionOnItemBoundary') > -1
+              || item.roles.indexOf('ExitCriterionOnItemBoundary') > -1) {
+              _canContain = true;
+            }
+
+          } else if(parentItem.roles.indexOf('StageModelActivity') > -1) {
+            if (item.roles.indexOf('ExitCriterionOnItemBoundary') > -1) {
+              _canContain = true;
+            }
+
+          } else if (parentCandidate.getStencil().idWithoutNs() === 'Pool') {
+            if (item.id === 'Lane') {
+              _canContain = true;
+            }
+          }
+
+          if (_canContain) {
+            editorManager.handleEvents({
+              type: ORYX.CONFIG.EVENT_HIGHLIGHT_SHOW,
+              highlightId: "shapeRepo.attached",
+              elements: [parentCandidate],
+              style: ORYX.CONFIG.SELECTION_HIGHLIGHT_STYLE_RECTANGLE,
+              color: ORYX.CONFIG.SELECTION_VALID_COLOR
+            });
+
+            editorManager.handleEvents({
+              type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+              highlightId: "shapeRepo.added"
+            });
+
+          } else {
+            for (let i = 0; i < containmentRules.length; i += 1) {
+              const rule = containmentRules[i];
+              if (rule.role === parentItem.id) {
+                for (let j = 0; j < rule.contains.length; j += 1) {
+                  if (item.roles.indexOf(rule.contains[j]) > -1) {
+                    _canContain = true;
+                    break;
+                  }
+                }
+
+                if (_canContain) {
+                  break;
+                }
+              }
+            }
+
+            // Show Highlight
+            editorManager.handleEvents({
+              type: ORYX.CONFIG.EVENT_HIGHLIGHT_SHOW,
+              highlightId: 'shapeRepo.added',
+              elements: [parentCandidate],
+              color: _canContain ? ORYX.CONFIG.SELECTION_VALID_COLOR : ORYX.CONFIG.SELECTION_INVALID_COLOR
+            });
+
+            editorManager.handleEvents({
+              type: ORYX.CONFIG.EVENT_HIGHLIGHT_HIDE,
+              highlightId: "shapeRepo.attached"
+            });
+          }
+          dragStateRef.current.dragCurrentParent = parentCandidate;
+          dragStateRef.current.dragCurrentParentId = parentCandidate.id;
+          dragStateRef.current.dragCurrentParentStencil = parentStencilId;
+          dragStateRef.current.dragCanContain = _canContain;
+        }
+    }
+  };
+
   return (
     <>
       <div className='pageWrapper'>
@@ -821,9 +1222,19 @@ export default function FlowableEditor() {
         <ToolbarSection />
         <div className="contentWrapper">
           {/* 左边的节点栏 */}
-          <PaletteSection className="leftSection" stencilItemGroups={stencilItemGroups} />
+          <PaletteSection
+            className="leftSection"
+            dragCallback={dragCallback}
+            startDragCallback={startDragCallback}
+            stencilItemGroups={stencilItemGroups}
+          />
           <div className='rightSection'>
-            <div id="contentCanvasWrapper" className='contentCanvasWrapper'>
+            <div
+              id="contentCanvasWrapper"
+              className='contentCanvasWrapper'
+              onDrop={dropCallback}
+              onDragOver={overCallback}
+            >
 
                 <div id="canvasHelpWrapper" className="col-xs-12">
                   <div className="canvas-wrapper" id="canvasSection">
