@@ -1,591 +1,860 @@
-import { useEffect, useRef } from 'react';
-import './FlowableEditor.less';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import './FlowableEditor.css';
+import plugins from './plugins';
 
-/* Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+import FLOWABLE from './FLOWABLE';
+import editorManager from './EditorManager';
+import DeleteIcon from './icons/delete'
+import SettingIcon from './icons/setting'
+import UserIcon from './icons/user';
+import EndRoundIcon from './icons/endRound'
+import DoubleRoundIcon from './icons/doubleRound';
+import TimerIcon from './icons/timer';
+import ArrowIcon from './icons/arrow';
+import DottedLineIcon from './icons/dottedLine';
+import TextAnnotationIcon from './icons/textAnnotation';
+import ExclusiveGatewayIcon from './icons/exclusiveGateway'
+import PropertySection from './PropertySection'
+import ToolbarSection from './ToolbarSection';
+import PaletteSection from './PaletteSection';
+
+const QuickMenuIconMap = {
+  UserTask: <UserIcon />,
+  EndNoneEvent: <EndRoundIcon />,
+  ThrowNoneEvent: <DoubleRoundIcon />,
+  CatchTimerEvent: <TimerIcon />,
+  SequenceFlow: <ArrowIcon />,
+  Association: <DottedLineIcon />,
+  TextAnnotation: <TextAnnotationIcon />,
+  ExclusiveGateway: <ExclusiveGatewayIcon />,
+}
+
+const modelId = '3cf3a5fa-1e8b-11eb-8419-525400395b29';
+
+
+const $rootScope = {};
+
+const httpGet = (url) => {
+  return fetch(url, { method: 'GET' })
+    .then((res) => res.json())
+    .then((data) => ({ data }));
+};
+
+$rootScope.editorFactory = {
+  privateResolve: null,
+};
+$rootScope.editorFactory.promise = new Promise((resolve, reject) => {
+  $rootScope.editorFactory.privateResolve = resolve;
+});
+$rootScope.editorFactory.resolve = () => $rootScope.editorFactory.privateResolve();
 
 /**
- * Created by Pardo David on 3/01/2017.
- * For this service to work the user must call bootEditor method
+ * Helper method that searches a group for an item with the given id.
+ * If not found, will return undefined.
  */
+function findStencilItemInGroup(stencilItemId, group) {
+  var item;
 
-const FLOWABLE = { URL: {}, CONFIG: {} };
-const PATH_NAME = 'http://scjoyedu.eicp.net:7180/onestopapi'
-FLOWABLE.CONFIG.contextModelerRestRoot = 'http://scjoyedu.eicp.net:7180/onestopapi/app'
-FLOWABLE.URL = {
-
-    getModel: function(modelId) {
-        return FLOWABLE.CONFIG.contextModelerRestRoot + '/rest/models/' + modelId + '/editor/json?version=' + Date.now();
-    },
-
-    getStencilSet: function() {
-        return FLOWABLE.CONFIG.contextModelerRestRoot + '/rest/stencil-sets/editor?version=' + Date.now();
-    },
-
-    getCmmnStencilSet: function() {
-        return FLOWABLE.CONFIG.contextModelerRestRoot + '/rest/stencil-sets/cmmneditor?version=' + Date.now();
-    },
-
-    getDmnStencilSet: function() {
-        return FLOWABLE.CONFIG.contextModelerRestRoot + '/rest/stencil-sets/dmneditor?version=' + Date.now();
-    },
-
-
-    putModel: function(modelId) {
-        return FLOWABLE.CONFIG.contextModelerRestRoot + '/rest/models/' + modelId + '/editor/json';
-    },
-
-    validateModel: function(){
-		return FLOWABLE.CONFIG.contextModelerRestRoot + '/rest/model/validate';
+  // Check all items directly in this group
+  for (var j = 0; j < group.items.length; j++) {
+    item = group.items[j];
+    if (item.id === stencilItemId) {
+      return item;
     }
-};
-
-/** Inspired by https://github.com/krasimir/EventBus/blob/master/src/EventBus.js */
-FLOWABLE.eventBus = {
-
-  /** Event fired when the editor is loaded and ready */
-  EVENT_TYPE_EDITOR_READY: 'event-type-editor-ready',
-
-  EVENT_TYPE_EDITOR_BOOTED: 'event-type-editor-booted',
-
-  /** Event fired when a selection is made on the canvas. */
-  EVENT_TYPE_SELECTION_CHANGE: 'event-type-selection-change',
-
-  /** Event fired when a toolbar button has been clicked. */
-  EVENT_TYPE_TOOLBAR_BUTTON_CLICKED: 'event-type-toolbar-button-clicked',
-
-  /** Event fired when a stencil item is dropped on the canvas. */
-  EVENT_TYPE_ITEM_DROPPED: 'event-type-item-dropped',
-
-  /** Event fired when a property value is changed. */
-  EVENT_TYPE_PROPERTY_VALUE_CHANGED: 'event-type-property-value-changed',
-
-  /** Event fired on double click in canvas. */
-  EVENT_TYPE_DOUBLE_CLICK: 'event-type-double-click',
-
-  /** Event fired on a mouse out */
-  EVENT_TYPE_MOUSE_OUT: 'event-type-mouse-out',
-
-  /** Event fired on a mouse over */
-  EVENT_TYPE_MOUSE_OVER: 'event-type-mouse-over',
-
-  /** Event fired when a model is saved. */
-  EVENT_TYPE_MODEL_SAVED: 'event-type-model-saved',
-
-  /** Event fired when the quick menu buttons should be hidden. */
-  EVENT_TYPE_HIDE_SHAPE_BUTTONS: 'event-type-hide-shape-buttons',
-
-  /** Event fired when the validation popup should be shown. */
-  EVENT_TYPE_SHOW_VALIDATION_POPUP: 'event-type-show-validation-popup',
-
-  /** Event fired when a different process must be loaded. */
-  EVENT_TYPE_NAVIGATE_TO_PROCESS: 'event-type-navigate-to-process',
-
-  EVENT_TYPE_UNDO_REDO_RESET : 'event-type-undo-redo-reset',
-
-  /** A mapping for storing the listeners*/
-  listeners: {},
-
-  /** The Oryx editor, which is stored locally to send events to */
-  editor: null,
-
-  /**
-   * Add an event listener to the event bus, listening to the event with the provided type.
-   * Type and callback are mandatory parameters.
-   *
-   * Provide scope parameter if it is important that the callback is executed
-   * within a specific scope.
-   */
-  addListener: function (type, callback, scope) {
-
-      // Add to the listeners map
-      if (typeof this.listeners[type] !== "undefined") {
-          this.listeners[type].push({scope: scope, callback: callback});
-      } else {
-          this.listeners[type] = [
-              {scope: scope, callback: callback}
-          ];
-      }
-  },
-
-  /**
-   * Removes the provided event listener.
-   */
-  removeListener: function (type, callback, scope) {
-      if (typeof this.listeners[type] != "undefined") {
-          var numOfCallbacks = this.listeners[type].length;
-          var newArray = [];
-          for (var i = 0; i < numOfCallbacks; i++) {
-              var listener = this.listeners[type][i];
-              if (listener.scope === scope && listener.callback === callback) {
-                  // Do nothing, this is the listener and doesn't need to survive
-              } else {
-                  newArray.push(listener);
-              }
-          }
-          this.listeners[type] = newArray;
-      }
-  },
-
-  hasListener:function(type, callback, scope) {
-      if(typeof this.listeners[type] != "undefined") {
-          var numOfCallbacks = this.listeners[type].length;
-          if(callback === undefined && scope === undefined){
-              return numOfCallbacks > 0;
-          }
-          for(var i=0; i<numOfCallbacks; i++) {
-              var listener = this.listeners[type][i];
-              if(listener.scope == scope && listener.callback == callback) {
-                  return true;
-              }
-          }
-      }
-      return false;
-  },
-
-  /**
-   * Dispatch an event to all event listeners registered to that specific type.
-   */
-  dispatch:function(type, event) {
-      if(typeof this.listeners[type] != "undefined") {
-          var numOfCallbacks = this.listeners[type].length;
-          for(var i=0; i<numOfCallbacks; i++) {
-              var listener = this.listeners[type][i];
-              if(listener && listener.callback) {
-                  listener.callback.apply(listener.scope, [event]);
-              }
-          }
-      }
-  },
-
-  dispatchOryxEvent: function(event, uiObject) {
-      FLOWABLE.eventBus.editor.handleEvents(event, uiObject);
   }
 
-};
-class EditorManager {
-  constructor() {
-
-  }
-  initialize() {
-    this.treeFilteredElements = ['SubProcess', 'CollapsedSubProcess'];
-    this.canvasTracker = new Hash();
-    this.structualIcons = {
-      SubProcess: 'expanded.subprocess.png',
-      CollapsedSubProcess: 'subprocess.png',
-      EventSubProcess: 'event.subprocess.png',
-    };
-
-    this.current = this.modelId;
-    this.loading = true;
-  }
-  getModelId() {
-    return this.modelId;
-  }
-  setModelId(modelId) {
-    this.modelId = modelId;
-  }
-  getCurrentModelId() {
-    return this.current;
-  }
-  setStencilData(stencilData) {
-    //we don't want a references!
-    this.stencilData = jQuery.extend(true, {}, stencilData);
-  }
-  getStencilData() {
-    return this.stencilData;
-  }
-  getSelection() {
-    return this.editor.selection;
-  }
-  getSubSelection() {
-    return this.editor._subSelection;
-  }
-  handleEvents(events) {
-    this.editor.handleEvents(events);
-  }
-  setSelection(selection) {
-    this.editor.setSelection(selection);
-  }
-  registerOnEvent(event, callback) {
-    this.editor.registerOnEvent(event, callback);
-  }
-  getChildShapeByResourceId(resourceId) {
-    return this.editor.getCanvas().getChildShapeByResourceId(resourceId);
-  }
-  getJSON() {
-    return this.editor.getJSON();
-  }
-  getStencilSets() {
-    return this.editor.getStencilSets();
-  }
-  getEditor() {
-    return this.editor; //TODO: find  out if we can avoid exposing the editor object to angular.
-  }
-  executeCommands(commands) {
-    this.editor.executeCommands(commands);
-  }
-  getCanvas() {
-    return this.editor.getCanvas();
-  }
-  getRules() {
-    return this.editor.getRules();
-  }
-  eventCoordinates(coordinates) {
-    return this.editor.eventCoordinates(coordinates);
-  }
-  eventCoordinatesXY(x, y) {
-    return this.editor.eventCoordinatesXY(x, y);
-  }
-  updateSelection() {
-    this.editor.updateSelection();
-  }
-  /**
-   * @returns the modeldata as received from the server. This does not represent the current editor data.
-   */
-  getBaseModelData() {
-    return this.modelData;
-  }
-  edit(resourceId) {
-    //Save the current canvas in the canvastracker if it is the root process.
-    this.syncCanvasTracker();
-
-    this.loading = true;
-
-    var shapes = this.getCanvas().getChildren();
-    shapes.each(
-      function (shape) {
-        this.editor.deleteShape(shape);
-      }.bind(this),
-    );
-
-    shapes = this.canvasTracker.get(resourceId);
-    if (!shapes) {
-      shapes = JSON.stringify([]);
-    }
-
-    this.editor.loadSerialized({
-      childShapes: shapes,
-    });
-
-    this.getCanvas().update();
-
-    this.current = resourceId;
-
-    this.loading = false;
-    FLOWABLE.eventBus.dispatch('EDITORMANAGER-EDIT-ACTION', {});
-    FLOWABLE.eventBus.dispatch(FLOWABLE.eventBus.EVENT_TYPE_UNDO_REDO_RESET, {});
-  }
-  getTree() {
-    //build a tree of all subprocesses and there children.
-    var result = new Hash();
-    var parent = this.getModel();
-    result.set('name', parent.properties['name'] || 'No name provided');
-    result.set('id', this.modelId);
-    result.set('type', 'root');
-    result.set('current', this.current === this.modelId);
-    var childShapes = parent.childShapes;
-    var children = this._buildTreeChildren(childShapes);
-    result.set('children', children);
-    return result.toObject();
-  }
-  _buildTreeChildren(childShapes) {
-    var children = [];
-    for (var i = 0; i < childShapes.length; i++) {
-      var childShape = childShapes[i];
-      var stencilId = childShape.stencil.id;
-      //we are currently only interested in the expanded subprocess and collapsed processes
-      if (stencilId && this.treeFilteredElements.indexOf(stencilId) > -1) {
-        var child = new Hash();
-        child.set('name', childShape.properties.name || 'No name provided');
-        child.set('id', childShape.resourceId);
-        child.set('type', stencilId);
-        child.set('current', childShape.resourceId === this.current);
-
-        //check if childshapes
-
-        if (stencilId === 'CollapsedSubProcess') {
-          //the save function stores the real object as a childshape
-          //it is possible that there is no child element because the user did not open the collapsed subprocess.
-          if (childShape.childShapes.length === 0) {
-            child.set('children', []);
-          } else {
-            child.set('children', this._buildTreeChildren(childShape.childShapes));
-          }
-          child.set('editable', true);
-        } else {
-          child.set('children', this._buildTreeChildren(childShape.childShapes));
-          child.set('editable', false);
-        }
-        child.set('icon', this.structualIcons[stencilId]);
-        children.push(child.toObject());
-      }
-    }
-    return children;
-  }
-  syncCanvasTracker() {
-    var shapes = this.getCanvas().getChildren();
-    var jsonShapes = [];
-    shapes.each(function (shape) {
-      //toJson is an summary object but its not a json string.!!!!!
-      jsonShapes.push(shape.toJSON());
-    });
-    this.canvasTracker.set(this.current, JSON.stringify(jsonShapes));
-  }
-  getModel() {
-    this.syncCanvasTracker();
-
-    var modelMetaData = this.getBaseModelData();
-
-    var stencilId = undefined;
-    var stencilSetNamespace = undefined;
-    var stencilSetUrl = undefined;
-    if (modelMetaData.model.stencilset.namespace == 'http://b3mn.org/stencilset/cmmn1.1#') {
-      stencilId = 'CMMNDiagram';
-      stencilSetNamespace = 'http://b3mn.org/stencilset/cmmn1.1#';
-      stencilSetUrl = '../editor/stencilsets/cmmn1.1/cmmn1.1.json';
-    } else if (modelMetaData.model.stencilset.namespace == 'http://b3mn.org/stencilset/dmn1.2#') {
-      stencilId = 'DMNDiagram';
-      stencilSetNamespace = 'http://b3mn.org/stencilset/dmn1.2#';
-      stencilSetUrl = '../editor/stencilsets/dmn1.1/dmn1.2.json';
-    } else {
-      stencilId = 'BPMNDiagram';
-      stencilSetNamespace = 'http://b3mn.org/stencilset/bpmn2.0#';
-      stencilSetUrl = '../editor/stencilsets/bpmn2.0/bpmn2.0.json';
-    }
-
-    //this is an object.
-    var editorConfig = this.editor.getJSON();
-    var model = {
-      modelId: this.modelId,
-      bounds: editorConfig.bounds,
-      properties: editorConfig.properties,
-      childShapes: JSON.parse(this.canvasTracker.get(this.modelId)),
-      stencil: {
-        id: stencilId,
-      },
-      stencilset: {
-        namespace: stencilSetNamespace,
-        url: stencilSetUrl,
-      },
-    };
-
-    this._mergeCanvasToChild(model);
-
-    return model;
-  }
-  setModelData(response) {
-    this.modelData = response.data;
-  }
-  bootEditor() {
-    //TODO: populate the canvas with correct json sections.
-    //resetting the state
-    this.canvasTracker = new Hash();
-    var config = jQuery.extend(true, {}, this.modelData); //avoid a reference to the original object.
-    if (!config.model.childShapes) {
-      config.model.childShapes = [];
-    }
-
-    this.findAndRegisterCanvas(config.model.childShapes); //this will remove any childshapes of a collapseable subprocess.
-    this.canvasTracker.set(config.modelId, JSON.stringify(config.model.childShapes)); //this will be overwritten almost instantly.
-
-    this.editor = new ORYX.Editor(config);
-    this.current = this.editor.id;
-    this.loading = false;
-
-    FLOWABLE.eventBus.editor = this.editor;
-    FLOWABLE.eventBus.dispatch('ORYX-EDITOR-LOADED', {});
-    FLOWABLE.eventBus.dispatch(FLOWABLE.eventBus.EVENT_TYPE_EDITOR_BOOTED, {});
-  }
-  findAndRegisterCanvas(childShapes) {
-    for (var i = 0; i < childShapes.length; i++) {
-      var childShape = childShapes[i];
-      if (childShape.stencil.id === 'CollapsedSubProcess') {
-        if (childShape.childShapes.length > 0) {
-          //the canvastracker will auto correct itself with a new canvasmodel see this.edit()...
-          this.findAndRegisterCanvas(childShape.childShapes);
-          //a canvas can't be nested as a child because the editor would crash on redundant information.
-          this.canvasTracker.set(childShape.resourceId, JSON.stringify(childShape.childShapes));
-          //reference to config will clear the value.
-          childShape.childShapes = [];
-        } else {
-          this.canvasTracker.set(childShape.resourceId, '[]');
-        }
+  // Check the child groups
+  if (group.groups && group.groups.length > 0) {
+    for (var k = 0; k < group.groups.length; k++) {
+      item = findStencilItemInGroup(stencilItemId, group.groups[k]);
+      if (item) {
+        return item;
       }
     }
   }
-  _mergeCanvasToChild(parent) {
-    for (var i = 0; i < parent.childShapes.length; i++) {
-      var childShape = parent.childShapes[i];
-      if (childShape.stencil.id === 'CollapsedSubProcess') {
-        var elements = this.canvasTracker.get(childShape.resourceId);
-        if (elements) {
-          elements = JSON.parse(elements);
-        } else {
-          elements = [];
-        }
-        childShape.childShapes = elements;
-        this._mergeCanvasToChild(childShape);
-      } else if (childShape.stencil.id === 'SubProcess') {
-        this._mergeCanvasToChild(childShape);
-      } else {
-        //do nothing?
-      }
-    }
-  }
-  dispatchOryxEvent(event) {
-    FLOWABLE.eventBus.dispatchOryxEvent(event);
-  }
-  isLoading() {
-    return this.loading;
-  }
-  navigateTo(resourceId) {
-    //TODO: this could be improved by check if the resourceId is not equal to the current tracker...
-    this.syncCanvasTracker();
-    var found = false;
-    this.canvasTracker.each(function (pair) {
-      var key = pair.key;
-      var children = JSON.parse(pair.value);
-      var targetable = this._findTarget(children, resourceId);
-      if (!found && targetable) {
-        this.edit(key);
-        var flowableShape = this.getCanvas().getChildShapeByResourceId(targetable);
-        this.setSelection([flowableShape], [], true);
-        found = true;
-      }
-    }, this);
-  }
-  _findTarget(children, resourceId) {
-    for (var i = 0; i < children.length; i++) {
-      var child = children[i];
-      if (child.resourceId === resourceId) {
-        return child.resourceId;
-      } else if (child.properties && child.properties['overrideid'] === resourceId) {
-        return child.resourceId;
-      } else {
-        var result = this._findTarget(child.childShapes, resourceId);
-        if (result) {
-          return result;
-        }
-      }
-    }
-    return false;
-  }
+
+  return undefined;
 }
-const modelId = 'c6ae1c7a-0a07-11eb-8419-525400395b29';
 
+// Helper method: find a group in an array
+const findGroup = function (name, groupArray) {
+  for (let index = 0; index < groupArray.length; index++) {
+    if (groupArray[index].name === name) {
+      return groupArray[index];
+    }
+  }
+  return null;
+};
 
-const editorManager = new EditorManager();
-
-
-const httpGet = url => {
-  console.log('http get, url: ', url);
-  return fetch(url, { method: 'GET' }).then(res => res.json()).then(data => ({ data }));
+// Helper method: add a new group to an array of groups
+const addGroup = function (groupName, groupArray) {
+  let group = { name: groupName, items: [], paletteItems: [], groups: [], visible: true };
+  groupArray.push(group);
+  return group;
 };
 
 export default function FlowableEditor() {
-  console.log('oryx ', window.ORYX.Editor);
+  const [stencilData, setStencilData] = useState();
+  const [ORYXEDITORLOADED, setORYXEDITORLOADED] = useState(false);
+  useEffect(() =>  {
+    editorManager.setStencilData(stencilData);
+  }, [stencilData])
+  const initializeEditor = useCallback(() => {
+    /**
+     * Initialize the Oryx Editor when the content has been loaded
+     */
+    if (!$rootScope.editorInitialized) {
 
-  useEffect(() => {
-    editorManager.setModelId(modelId);
-    httpGet(FLOWABLE.URL.getModel(modelId)).then(response => {
-      console.log('response ', response)
-      editorManager.setModelData(response);
-	    return response;
-    }).then(modelData => {
-      if(modelData.data.model.stencilset.namespace == 'http://b3mn.org/stencilset/cmmn1.1#') {
-        return httpGet(FLOWABLE.URL.getCmmnStencilSet());
-     }
-     if (modelData.data.model.stencilset.namespace == 'http://b3mn.org/stencilset/dmn1.2#') {
-        return httpGet(FLOWABLE.URL.getDmnStencilSet());
-     }
-     return httpGet(FLOWABLE.URL.getStencilSet());
-    }).then(function (response) {
-      const baseUrl = "http://b3mn.org/stencilset/";
-     editorManager.setStencilData(response.data);
-     //the stencilset alters the data ref!
-     const stencilSet = new ORYX.Core.StencilSet.StencilSet(baseUrl, response.data);
-     ORYX.Core.StencilSet.loadStencilSet(baseUrl, stencilSet, modelId);
-     //after the stencilset is loaded we make sure the plugins.xml is loaded.
-    //  return httpGet(PATH_NAME + ORYX.CONFIG.PLUGINS_CONFIG);
-      return { data: `<?xml version="1.0" encoding="utf-8"?>
-          <config>
 
-            <plugins>
-              <plugin source="version.js" name="" />
-              <plugin source="signavio.js" name="Signavio.Plugins.Loading" />
-
-              <plugin source="loading.js" name="ORYX.Plugins.Loading" />
-              <plugin source="canvasResize.js" name="ORYX.Plugins.CanvasResize">
-                <notUsesIn namespace="http://b3mn.org/stencilset/xforms#"/>
-              </plugin>
-
-              <plugin source="renameShapes.js" name="ORYX.Plugins.RenameShapes" />
-              <plugin source="processLink.js" name="ORYX.Plugins.ProcessLink">
-                <requires namespace="http://b3mn.org/stencilset/bpmn1.1#"/>
-              </plugin>
-
-              <!-- following plugins don't require Ext -->
-              <plugin source="arrangement.js" name="ORYX.Plugins.Arrangement">
-                <notUsesIn namespace="http://b3mn.org/stencilset/xforms#"/>
-              </plugin>
-              <plugin source="file.js" name="ORYX.Plugins.Save"/>
-              <plugin source="view.js" name="ORYX.Plugins.View" />
-              <plugin source="dragdropresize.js" name="ORYX.Plugins.DragDropResize" />
-              <plugin source="shapeHighlighting.js" name="ORYX.Plugins.HighlightingSelectedShapes" />
-              <plugin source="dragDocker.js" name="ORYX.Plugins.DragDocker">
-                <notUsesIn namespace="http://b3mn.org/stencilset/xforms#" />
-              </plugin>
-              <plugin source="addDocker.js" name="ORYX.Plugins.AddDocker">
-                <notUsesIn namespace="http://b3mn.org/stencilset/xforms#" />
-              </plugin>
-              <plugin source="selectionframe.js" name="ORYX.Plugins.SelectionFrame">
-                <notUsesIn namespace="http://b3mn.org/stencilset/xforms#" />
-              </plugin>
-              <plugin source="shapeHighlighting.js" name="ORYX.Plugins.ShapeHighlighting" />
-              <plugin source="overlay.js" name="ORYX.Plugins.Overlay" />
-              <plugin source="keysMove.js" name="ORYX.Plugins.KeysMove" />
-              <plugin source="Layouter/edgeLayouter.js" name="ORYX.Plugins.Layouter.EdgeLayouter" />
-
-              <!-- Begin: BPMN2.0 specific plugins -->
-              <plugin source="bpmn2.0/bpmn2.0.js" name="ORYX.Plugins.BPMN2_0">
-                <requires namespace="http://b3mn.org/stencilset/bpmn2.0#" />
-              </plugin>
-
-              <!-- End: BPMN2.0 specific plugins -->
-            </plugins>
-
-            <properties>
-              <property group="File" index="1" />
-              <property group="Edit" index="2" />
-              <property group="Undo" index="3" />
-              <property group="Alignment" index="4" />
-              <property group="Group" index="5" />
-              <property group="Z-Order" index="6" />
-              <property group="Docker" index="7" />
-              <property group="Zoom" index="8" />
-            </properties>
-          </config>`
+      /**
+       * A 'safer' apply that avoids concurrent updates (which $apply allows).
+       */
+      $rootScope.safeApply = function (fn) {
+        if (this.$root) {
+          var phase = this.$root.$$phase;
+          if (phase == '$apply' || phase == '$digest') {
+            if (fn && typeof fn === 'function') {
+              fn();
+            }
+          } else {
+            this.$apply(fn);
+          }
+        } else {
+          this.$apply(fn);
+        }
       };
 
-   }).then(function (response) {
-     ORYX._loadPlugins(response.data);
-     return response;
-   }).then(function (response) {
-     editorManager.bootEditor();
-   }).catch(function (error) {
-     console.log(error);
-   });
+      $rootScope.addHistoryItem = function (resourceId) {
+        const modelMetaData = editorManager.getBaseModelData();
+
+        const historyItem = {
+          id: modelMetaData.modelId,
+          name: modelMetaData.name,
+          key: modelMetaData.key,
+          stepId: resourceId,
+          type: 'bpmnmodel',
+        };
+
+        if (editorManager.getCurrentModelId() != editorManager.getModelId()) {
+          historyItem.subProcessId = editorManager.getCurrentModelId();
+        }
+
+        $rootScope.editorHistory.push(historyItem);
+      };
+
+      $rootScope.getStencilSetName = function () {
+        const modelMetaData = editorManager.getBaseModelData();
+        if (modelMetaData.model.stencilset.namespace === 'http://b3mn.org/stencilset/cmmn1.1#') {
+          return 'cmmn1.1';
+        }
+        return 'bpmn2.0';
+      };
+
+      /**
+       * Initialize the event bus: couple all Oryx events with a dispatch of the
+       * event of the event bus. This way, it gets much easier to attach custom logic
+       * to any event.
+       */
+
+      $rootScope.editorFactory.promise.then(function () {
+        $rootScope.formItems = undefined;
+
+        FLOWABLE.eventBus.editor = $rootScope.editor;
+
+        const eventMappings = [
+          {
+            oryxType: ORYX.CONFIG.EVENT_SELECTION_CHANGED,
+            flowableType: FLOWABLE.eventBus.EVENT_TYPE_SELECTION_CHANGE,
+          },
+          {
+            oryxType: ORYX.CONFIG.EVENT_DBLCLICK,
+            flowableType: FLOWABLE.eventBus.EVENT_TYPE_DOUBLE_CLICK,
+          },
+          {
+            oryxType: ORYX.CONFIG.EVENT_MOUSEOUT,
+            flowableType: FLOWABLE.eventBus.EVENT_TYPE_MOUSE_OUT,
+          },
+          {
+            oryxType: ORYX.CONFIG.EVENT_MOUSEOVER,
+            flowableType: FLOWABLE.eventBus.EVENT_TYPE_MOUSE_OVER,
+          },
+          {
+            oryxType: ORYX.CONFIG.EVENT_EDITOR_INIT_COMPLETED,
+            flowableType: FLOWABLE.eventBus.EVENT_TYPE_EDITOR_READY,
+          },
+          {
+            oryxType: ORYX.CONFIG.EVENT_PROPERTY_CHANGED,
+            flowableType: FLOWABLE.eventBus.EVENT_TYPE_PROPERTY_VALUE_CHANGED,
+          },
+        ];
+
+        eventMappings.forEach(function (eventMapping) {
+          editorManager.registerOnEvent(eventMapping.oryxType, function (event) {
+            FLOWABLE.eventBus.dispatch(eventMapping.flowableType, event);
+          });
+        });
+
+        // Show getting started if this is the first time (boolean true for use local storage)
+        // FLOWABLE_EDITOR_TOUR.gettingStarted($scope, $translate, $q, true);
+      });
+
+      // Hook in resizing of main panels when window resizes
+      // TODO: perhaps move to a separate JS-file?
+      jQuery(window).resize(function () {
+        // Calculate the offset based on the bottom of the module header
+        const offset = jQuery('#editor-header').offset();
+        const propSectionHeight = jQuery('#propertySection').height();
+        const canvas = jQuery('#canvasSection');
+        const mainHeader = jQuery('#main-header');
+
+        if (
+          offset == undefined ||
+          offset === null ||
+          propSectionHeight === undefined ||
+          propSectionHeight === null ||
+          canvas === undefined ||
+          canvas === null ||
+          mainHeader === null
+        ) {
+          return;
+        }
+
+        if ($rootScope.editor) {
+          const selectedElements = editorManager.getSelection();
+          const subSelectionElements = editorManager.getSelection();
+
+          $scope.selectedElements = selectedElements;
+          $scope.subSelectionElements = subSelectionElements;
+          if (selectedElements && selectedElements.length > 0) {
+            $rootScope.selectedElementBeforeScrolling = selectedElements[0];
+
+            editorManager.setSelection([]); // needed cause it checks for element changes and does nothing if the elements are the same
+            editorManager.setSelection($scope.selectedElements, $scope.subSelectionElements);
+            $scope.selectedElements = undefined;
+            $scope.subSelectionElements = undefined;
+          }
+        }
+
+        const totalAvailable = jQuery(window).height() - offset.top - mainHeader.height() - 21;
+        canvas.height(totalAvailable - propSectionHeight);
+        const footerHeight = jQuery('#paletteSectionFooter').height();
+        const treeViewHeight = jQuery('#process-treeview-wrapper').height();
+        jQuery('#paletteSection').height(totalAvailable - treeViewHeight - footerHeight);
+
+        // Update positions of the resize-markers, according to the canvas
+
+        var actualCanvas = null;
+        if (canvas && canvas[0].children[1]) {
+          actualCanvas = canvas[0].children[1];
+        }
+
+        var canvasTop = canvas.position().top;
+        var canvasLeft = canvas.position().left;
+        var canvasHeight = canvas[0].clientHeight;
+        var canvasWidth = canvas[0].clientWidth;
+        var iconCenterOffset = 8;
+        var widthDiff = 0;
+
+        var actualWidth = 0;
+        if (actualCanvas) {
+          // In some browsers, the SVG-element clientwidth isn't available, so we revert to the parent
+          actualWidth = actualCanvas.clientWidth || actualCanvas.parentNode.clientWidth;
+        }
+
+        if (actualWidth < canvas[0].clientWidth) {
+          widthDiff = actualWidth - canvas[0].clientWidth;
+          // In case the canvas is smaller than the actual viewport, the resizers should be moved
+          canvasLeft -= widthDiff / 2;
+          canvasWidth += widthDiff;
+        }
+
+        var iconWidth = 17;
+        var iconOffset = 20;
+
+        var north = jQuery('#canvas-grow-N');
+        north.css('top', canvasTop + iconOffset + 'px');
+        north.css('left', canvasLeft - 10 + (canvasWidth - iconWidth) / 2 + 'px');
+
+        var south = jQuery('#canvas-grow-S');
+        south.css('top', canvasTop + canvasHeight - iconOffset - iconCenterOffset + 'px');
+        south.css('left', canvasLeft - 10 + (canvasWidth - iconWidth) / 2 + 'px');
+
+        var east = jQuery('#canvas-grow-E');
+        east.css('top', canvasTop - 10 + (canvasHeight - iconWidth) / 2 + 'px');
+        east.css('left', canvasLeft + canvasWidth - iconOffset - iconCenterOffset + 'px');
+
+        var west = jQuery('#canvas-grow-W');
+        west.css('top', canvasTop - 10 + (canvasHeight - iconWidth) / 2 + 'px');
+        west.css('left', canvasLeft + iconOffset + 'px');
+
+        north = jQuery('#canvas-shrink-N');
+        north.css('top', canvasTop + iconOffset + 'px');
+        north.css('left', canvasLeft + 10 + (canvasWidth - iconWidth) / 2 + 'px');
+
+        south = jQuery('#canvas-shrink-S');
+        south.css('top', canvasTop + canvasHeight - iconOffset - iconCenterOffset + 'px');
+        south.css('left', canvasLeft + 10 + (canvasWidth - iconWidth) / 2 + 'px');
+
+        east = jQuery('#canvas-shrink-E');
+        east.css('top', canvasTop + 10 + (canvasHeight - iconWidth) / 2 + 'px');
+        east.css('left', canvasLeft + canvasWidth - iconOffset - iconCenterOffset + 'px');
+
+        west = jQuery('#canvas-shrink-W');
+        west.css('top', canvasTop + 10 + (canvasHeight - iconWidth) / 2 + 'px');
+        west.css('left', canvasLeft + iconOffset + 'px');
+      });
+
+      jQuery(window).trigger('resize');
+
+      jQuery.fn.scrollStopped = function (callback) {
+        jQuery(this).scroll(function () {
+          var self = this,
+            $this = jQuery(self);
+          if ($this.data('scrollTimeout')) {
+            clearTimeout($this.data('scrollTimeout'));
+          }
+          $this.data('scrollTimeout', setTimeout(callback, 50, self));
+        });
+      };
+
+
+
+      FLOWABLE.eventBus.addListener(
+        'ORYX-EDITOR-LOADED',
+        function () {
+          setORYXEDITORLOADED(true);
+          this.editorFactory.resolve();
+          this.editorInitialized = true;
+          this.modelData = editorManager.getBaseModelData();
+        },
+        $rootScope,
+      );
+
+      FLOWABLE.eventBus.addListener(FLOWABLE.eventBus.EVENT_TYPE_EDITOR_READY, function () {
+        var url = window.location.href;
+        var regex = new RegExp('[?&]subProcessId(=([^&#]*)|&|#|$)');
+        var results = regex.exec(url);
+        if (results && results[2]) {
+          editorManager.edit(decodeURIComponent(results[2].replace(/\+/g, ' ')));
+        }
+      });
+    }
+
+    if (!$rootScope.stencilInitialized) {
+
+      FLOWABLE.eventBus.addListener(FLOWABLE.eventBus.EVENT_TYPE_HIDE_SHAPE_BUTTONS, function (event) {
+        jQuery('.Oryx_button').each(function(i, obj) {
+            obj.style.display = "none";
+        });
+      });
+
+    //   /*
+    //     * Listen to property updates and act upon them
+    //     */
+    //   FLOWABLE.eventBus.addListener(FLOWABLE.eventBus.EVENT_TYPE_PROPERTY_VALUE_CHANGED, function (event) {
+    //     if (event.property && event.property.key) {
+    //         // If the name property is been updated, we also need to change the title of the currently selected item
+    //         if (event.property.key === 'oryx-name' && $scope.selectedItem !== undefined && $scope.selectedItem !== null) {
+    //             $scope.selectedItem.title = event.newValue;
+    //         }
+
+    //         // Update "no value" flag
+    //         event.property.noValue = (event.property.value === undefined
+    //             || event.property.value === null
+    //             || event.property.value.length == 0);
+    //     }
+    //   });
+    //   FLOWABLE.eventBus.addListener(FLOWABLE.eventBus.EVENT_TYPE_SHOW_VALIDATION_POPUP, function (event) {
+    //     // Method to open validation dialog
+    //     var showValidationDialog = function() {
+    //         $rootScope.currentValidationId = event.validationId;
+    //         $rootScope.isOnProcessLevel = event.onProcessLevel;
+
+    //         _internalCreateModal({template: 'editor-app/popups/validation-errors.html?version=' + Date.now()},  $modal, $rootScope);
+    //     };
+
+    //     showValidationDialog();
+    //   });
+
+    // FLOWABLE.eventBus.addListener(FLOWABLE.eventBus.EVENT_TYPE_NAVIGATE_TO_PROCESS, function (event) {
+    //     var modelMetaData = editorManager.getBaseModelData();
+    //     $rootScope.editorHistory.push({
+    //           id: modelMetaData.modelId,
+    //           name: modelMetaData.name,
+    //           type: 'bpmnmodel'
+    //     });
+
+    //     $window.location.href = "../editor/#/editor/" + event.processId;
+    //   });
+      $rootScope.stencilInitialized = true;
+    }
   }, []);
-  return <h1>hello world</h1>;
+  const fetchModelData = useCallback(() => {
+    editorManager.setModelId(modelId);
+    httpGet(FLOWABLE.URL.getModel(modelId))
+      .then((response) => {
+        console.log('response ', response);
+        editorManager.setModelData(response);
+        return response;
+      })
+      .then((modelData) => {
+        if (modelData.data.model.stencilset.namespace == 'http://b3mn.org/stencilset/cmmn1.1#') {
+          return httpGet(FLOWABLE.URL.getCmmnStencilSet());
+        }
+        if (modelData.data.model.stencilset.namespace == 'http://b3mn.org/stencilset/dmn1.2#') {
+          return httpGet(FLOWABLE.URL.getDmnStencilSet());
+        }
+        return httpGet(FLOWABLE.URL.getStencilSet());
+      })
+      .then(function (response) {
+        const baseUrl = 'http://b3mn.org/stencilset/';
+        setStencilData(response.data);
+        //the stencilset alters the data ref!
+        const stencilSet = new ORYX.Core.StencilSet.StencilSet(baseUrl, response.data);
+        ORYX.Core.StencilSet.loadStencilSet(baseUrl, stencilSet, modelId);
+        //after the stencilset is loaded we make sure the plugins.xml is loaded.
+        //  return httpGet(PATH_NAME + ORYX.CONFIG.PLUGINS_CONFIG);
+        return { data: plugins };
+      })
+      .then(function (response) {
+        ORYX._loadPlugins(response.data);
+        return response;
+      })
+      .then(function (response) {
+        editorManager.bootEditor();
+      })
+      .catch(function (error) {
+        console.log(error);
+      });
+  }, []);
+
+  const [
+    stencilItemGroups = [],
+    containmentRules = [],
+    quickMenuItems = [],
+    morphRoles = [],
+  ] = useMemo(() => {
+    const stencilItemGroups = [];
+    const data = stencilData;
+    if (!data) return [];
+
+    let quickMenuDefinition = undefined;
+    let ignoreForPaletteDefinition = undefined;
+
+    if (data.namespace == 'http://b3mn.org/stencilset/cmmn1.1#') {
+      quickMenuDefinition = ['HumanTask', 'Association'];
+      ignoreForPaletteDefinition = ['CasePlanModel'];
+    } else if (data.namespace == 'http://b3mn.org/stencilset/dmn1.2#') {
+      quickMenuDefinition = [
+        'DecisionTableDecision',
+        'InformationRequirement',
+        'KnowledgeRequirement',
+      ];
+      ignoreForPaletteDefinition = [];
+    } else {
+      quickMenuDefinition = [
+        'UserTask',
+        'EndNoneEvent',
+        'ExclusiveGateway',
+        'CatchTimerEvent',
+        'ThrowNoneEvent',
+        'TextAnnotation',
+        'SequenceFlow',
+        'Association',
+      ];
+
+      ignoreForPaletteDefinition = [
+        'SequenceFlow',
+        'MessageFlow',
+        'Association',
+        'DataAssociation',
+        'DataStore',
+        'SendTask',
+      ];
+    }
+
+    let quickMenuItems = [];
+
+    let morphRoles = [];
+    for (let i = 0; i < data.rules.morphingRules.length; i++) {
+      let role = data.rules.morphingRules[i].role;
+      let roleItem = { role: role, morphOptions: [] };
+      morphRoles.push(roleItem);
+    }
+
+    // Check all received items
+    for (let stencilIndex = 0; stencilIndex < data.stencils.length; stencilIndex++) {
+      // Check if the root group is the 'diagram' group. If so, this item should not be shown.
+      let currentGroupName = data.stencils[stencilIndex].groups[0];
+      if (
+        currentGroupName === 'Diagram' ||
+        currentGroupName === 'BPMN.STENCILS.GROUPS.DIAGRAM' ||
+        currentGroupName === 'CMMN.STENCILS.GROUPS.DIAGRAM' ||
+        currentGroupName === 'DMN.STENCILS.GROUPS.DIAGRAM'
+      ) {
+        continue; // go to next item
+      }
+
+      let removed = false;
+      if (data.stencils[stencilIndex].removed) {
+        removed = true;
+      }
+
+      let currentGroup = undefined;
+      if (!removed) {
+        // Check if this group already exists. If not, we create a new one
+
+        if (
+          currentGroupName !== null &&
+          currentGroupName !== undefined &&
+          currentGroupName.length > 0
+        ) {
+          currentGroup = findGroup(currentGroupName, stencilItemGroups); // Find group in root groups array
+          if (currentGroup === null) {
+            currentGroup = addGroup(currentGroupName, stencilItemGroups);
+          }
+
+          // Add all child groups (if any)
+          for (
+            let groupIndex = 1;
+            groupIndex < data.stencils[stencilIndex].groups.length;
+            groupIndex++
+          ) {
+            let childGroupName = data.stencils[stencilIndex].groups[groupIndex];
+            let childGroup = findGroup(childGroupName, currentGroup.groups);
+            if (childGroup === null) {
+              childGroup = addGroup(childGroupName, currentGroup.groups);
+            }
+
+            // The current group variable holds the parent of the next group (if any),
+            // and is basically the last element in the array of groups defined in the stencil item
+            currentGroup = childGroup;
+          }
+        }
+      }
+
+      // Construct the stencil item
+      let stencilItem = {
+        id: data.stencils[stencilIndex].id,
+        name: data.stencils[stencilIndex].title,
+        description: data.stencils[stencilIndex].description,
+        icon: data.stencils[stencilIndex].icon,
+        type: data.stencils[stencilIndex].type,
+        roles: data.stencils[stencilIndex].roles,
+        removed: removed,
+        customIcon: false,
+        canConnect: false,
+        canConnectTo: false,
+        canConnectAssociation: false,
+      };
+
+      if (
+        data.stencils[stencilIndex].customIconId &&
+        data.stencils[stencilIndex].customIconId > 0
+      ) {
+        stencilItem.customIcon = true;
+        stencilItem.icon = data.stencils[stencilIndex].customIconId;
+      }
+
+      if (!removed) {
+        if (quickMenuDefinition.indexOf(stencilItem.id) >= 0) {
+          quickMenuItems[quickMenuDefinition.indexOf(stencilItem.id)] = stencilItem;
+        }
+      }
+
+      if (stencilItem.id === 'TextAnnotation' || stencilItem.id === 'BoundaryCompensationEvent') {
+        stencilItem.canConnectAssociation = true;
+      }
+
+      for (let i = 0; i < data.stencils[stencilIndex].roles.length; i++) {
+        let stencilRole = data.stencils[stencilIndex].roles[i];
+        if (data.namespace == 'http://b3mn.org/stencilset/cmmn1.1#') {
+          if (stencilRole === 'association_start') {
+            stencilItem.canConnect = true;
+          } else if (stencilRole === 'association_end') {
+            stencilItem.canConnectTo = true;
+          }
+        } else if (data.namespace == 'http://b3mn.org/stencilset/dmn1.2#') {
+          if (stencilRole === 'information_requirement_start') {
+            stencilItem.canConnect = true;
+          } else if (stencilRole === 'information_requirement_end') {
+            stencilItem.canConnectTo = true;
+          }
+        } else {
+          if (stencilRole === 'sequence_start') {
+            stencilItem.canConnect = true;
+          } else if (stencilRole === 'sequence_end') {
+            stencilItem.canConnectTo = true;
+          }
+        }
+
+        for (var j = 0; j < morphRoles.length; j++) {
+          if (stencilRole === morphRoles[j].role) {
+            if (!removed) {
+              morphRoles[j].morphOptions.push(stencilItem);
+            }
+            stencilItem.morphRole = morphRoles[j].role;
+            break;
+          }
+        }
+      }
+
+      if (currentGroup) {
+        // Add the stencil item to the correct group
+        currentGroup.items.push(stencilItem);
+        if (ignoreForPaletteDefinition.indexOf(stencilItem.id) < 0) {
+          currentGroup.paletteItems.push(stencilItem);
+        }
+      } else {
+        // It's a root stencil element
+        if (!removed) {
+          stencilItemGroups.push(stencilItem);
+        }
+      }
+    }
+
+    for (var i = 0; i < stencilItemGroups.length; i++) {
+      if (stencilItemGroups[i].paletteItems && stencilItemGroups[i].paletteItems.length == 0) {
+        stencilItemGroups[i].visible = false;
+      }
+    }
+
+    var containmentRules = [];
+    for (var i = 0; i < data.rules.containmentRules.length; i++) {
+      var rule = data.rules.containmentRules[i];
+      containmentRules.push(rule);
+    }
+
+    // remove quick menu items which are not available anymore due to custom pallette
+    var availableQuickMenuItems = [];
+    for (var i = 0; i < quickMenuItems.length; i++) {
+      if (quickMenuItems[i]) {
+        availableQuickMenuItems[availableQuickMenuItems.length] = quickMenuItems[i];
+      }
+    }
+
+    return [stencilItemGroups, containmentRules, availableQuickMenuItems, morphRoles];
+  }, [stencilData]);
+
+  /**
+   * Helper method to find a stencil item.
+   */
+
+  const getStencilItemById = useCallback(stencilItemId => {
+    for (var i = 0; i < stencilItemGroups.length; i++) {
+      var element = stencilItemGroups[i];
+
+      // Real group
+      if (element.items !== null && element.items !== undefined) {
+        var item = findStencilItemInGroup(stencilItemId, element);
+        if (item) {
+          return item;
+        }
+      } else {
+        // Root stencil item
+        if (element.id === stencilItemId) {
+          return element;
+        }
+      }
+    }
+    return undefined;
+  }, [stencilItemGroups]);
+
+
+  const setOryxButtonPosition = useCallback((event) => {
+    FLOWABLE.eventBus.dispatch(FLOWABLE.eventBus.EVENT_TYPE_HIDE_SHAPE_BUTTONS);
+    console.log('EVENT_SELECTION_CHANGED, ', event);
+    var shapes = event.elements;
+
+    if (shapes && shapes.length == 1) {
+      var selectedShape = shapes.first();
+
+      var a = editorManager.getCanvas().node.getScreenCTM();
+
+      var absoluteXY = selectedShape.absoluteXY();
+
+      absoluteXY.x *= a.a;
+      absoluteXY.y *= a.d;
+
+      var additionalIEZoom = 1;
+      if (!isNaN(screen.logicalXDPI) && !isNaN(screen.systemXDPI)) {
+        var ua = navigator.userAgent;
+        if (ua.indexOf('MSIE') >= 0) {
+          //IE 10 and below
+          var zoom = Math.round((screen.deviceXDPI / screen.logicalXDPI) * 100);
+          if (zoom !== 100) {
+            additionalIEZoom = zoom / 100;
+          }
+        }
+      }
+
+      if (additionalIEZoom === 1) {
+        absoluteXY.y = absoluteXY.y - jQuery('#canvasSection').offset().top + 5;
+        absoluteXY.x = absoluteXY.x - jQuery('#canvasSection').offset().left;
+      } else {
+        var canvasOffsetLeft = jQuery('#canvasSection').offset().left;
+        var canvasScrollLeft = jQuery('#canvasSection').scrollLeft();
+        var canvasScrollTop = jQuery('#canvasSection').scrollTop();
+
+        var offset = a.e - canvasOffsetLeft * additionalIEZoom;
+        var additionaloffset = 0;
+        if (offset > 10) {
+          additionaloffset = offset / additionalIEZoom - offset;
+        }
+        absoluteXY.y =
+          absoluteXY.y -
+          jQuery('#canvasSection').offset().top * additionalIEZoom +
+          5 +
+          (canvasScrollTop * additionalIEZoom - canvasScrollTop);
+        absoluteXY.x =
+          absoluteXY.x -
+          canvasOffsetLeft * additionalIEZoom +
+          additionaloffset +
+          (canvasScrollLeft * additionalIEZoom - canvasScrollLeft);
+      }
+
+      var bounds = new ORYX.Core.Bounds(
+        a.e + absoluteXY.x,
+        a.f + absoluteXY.y,
+        a.e + absoluteXY.x + a.a * selectedShape.bounds.width(),
+        a.f + absoluteXY.y + a.d * selectedShape.bounds.height(),
+      );
+      var shapeXY = bounds.upperLeft();
+      let morphShapes = [];
+      var stencilItem = getStencilItemById(selectedShape.getStencil().idWithoutNs());
+      if (stencilItem && stencilItem.morphRole) {
+        for (var i = 0; i < morphRoles.length; i++) {
+          if (morphRoles[i].role === stencilItem.morphRole) {
+            morphShapes = morphRoles[i].morphOptions;
+          }
+        }
+      }
+
+      var x = shapeXY.x;
+      if (bounds.width() < 48) {
+        x -= 24;
+      }
+
+      if (morphShapes && morphShapes.length > 0) {
+        // In case the element is not wide enough, start the 2 bottom-buttons more to the left
+        // to prevent overflow in the right-menu
+
+        var morphButton = document.getElementById('morph-button');
+        morphButton.style.display = 'block';
+        morphButton.style.left = x + 24 + 'px';
+        morphButton.style.top = shapeXY.y + bounds.height() + 2 + 'px';
+      }
+
+      var deleteButton = document.getElementById('delete-button');
+      deleteButton.style.display = 'block';
+      deleteButton.style.left = x + 'px';
+      deleteButton.style.top = shapeXY.y + bounds.height() + 2 + 'px';
+
+      var editable = selectedShape._stencil._jsonStencil.id.endsWith('CollapsedSubProcess');
+      var editButton = document.getElementById('edit-button');
+      if (editable) {
+        editButton.style.display = 'block';
+        if (morphShapes && morphShapes.length > 0) {
+          editButton.style.left = x + 24 + 24 + 'px';
+        } else {
+          editButton.style.left = x + 24 + 'px';
+        }
+        editButton.style.top = shapeXY.y + bounds.height() + 2 + 'px';
+      } else {
+        editButton.style.display = 'none';
+      }
+
+      if (stencilItem && (stencilItem.canConnect || stencilItem.canConnectAssociation)) {
+        var quickButtonCounter = 0;
+        var quickButtonX = shapeXY.x + bounds.width() + 5;
+        var quickButtonY = shapeXY.y;
+        jQuery('.Oryx_button').each(function (i, obj) {
+          if (
+            obj.id !== 'morph-button' &&
+            obj.id != 'delete-button' &&
+            obj.id !== 'edit-button'
+          ) {
+            quickButtonCounter++;
+            if (quickButtonCounter > 3) {
+              quickButtonX = shapeXY.x + bounds.width() + 5;
+              quickButtonY += 24;
+              quickButtonCounter = 1;
+            } else if (quickButtonCounter > 1) {
+              quickButtonX += 24;
+            }
+
+            obj.style.display = 'block';
+            obj.style.left = quickButtonX + 'px';
+            obj.style.top = quickButtonY + 'px';
+          }
+        });
+      }
+    }
+  }, [morphRoles, getStencilItemById]);
+  useEffect(() => {
+    if (!ORYXEDITORLOADED) return;
+
+    editorManager.registerOnEvent(ORYX.CONFIG.EVENT_SELECTION_CHANGED, setOryxButtonPosition);
+    return () => {
+      editorManager.unregisterOnEvent(ORYX.CONFIG.EVENT_SELECTION_CHANGED, setOryxButtonPosition)
+    }
+  }, [ORYXEDITORLOADED, setOryxButtonPosition]);
+
+  useEffect(() => {
+    $rootScope.forceSelectionRefresh = false;
+
+    $rootScope.ignoreChanges = false; // by default never ignore changes
+
+    $rootScope.validationErrors = [];
+
+    $rootScope.staticIncludeVersion = Date.now();
+
+    initializeEditor();
+    fetchModelData();
+
+  }, [initializeEditor, fetchModelData]);
+
+  return (
+    <>
+      <div className='pageWrapper'>
+        {/* 最上边的工具栏 */}
+        <ToolbarSection />
+        <div className="contentWrapper">
+          {/* 左边的节点栏 */}
+          <PaletteSection className="leftSection" stencilItemGroups={stencilItemGroups} />
+          <div className='rightSection'>
+            <div id="contentCanvasWrapper" className='contentCanvasWrapper'>
+
+                <div id="canvasHelpWrapper" className="col-xs-12">
+                  <div className="canvas-wrapper" id="canvasSection">
+                    <div className="canvas-message" id="model-modified-date"></div>
+                    <div className="Oryx_button" id="delete-button" style={{ display: 'none'}}>
+                      <DeleteIcon />
+                    </div>
+                    <div className="Oryx_button" id="morph-button" style={{ display: 'none'}}>
+                      <SettingIcon />
+                    </div>
+                    <div className="Oryx_button" id="edit-button" style={{ display: 'none'}}>
+                      edit
+                    </div>
+                    {quickMenuItems.map(item => (
+                      <div
+                        key={item.id}
+                        className="Oryx_button"
+                        id={item.id}
+                        title={item.description}
+                        style={{ display: 'none'}}
+                      >
+                        {QuickMenuIconMap[item.id]}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            <PropertySection ORYXEDITORLOADED={ORYXEDITORLOADED} />
+          </div>
+        </div>
+      </div>
+    </>
+  );
 }

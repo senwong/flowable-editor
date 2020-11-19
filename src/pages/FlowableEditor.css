@@ -1,0 +1,62 @@
+.canvas-wrapper {
+  position: relative;
+}
+.Oryx_button {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  padding: 4px 2px;
+  background-color: #ffffff;
+  background-color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  transition: background-color 0.25s ease-in-out;
+}
+.Oryx_button:hover {
+  background-color: #999999;
+  background-color: rgba(193, 229, 238, 0.7);
+  opacity: 1 !important;
+  -webkit-border-radius: 3px;
+  -moz-border-radius: 3px;
+  border-radius: 3px;
+}
+
+.pageWrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.contentWrapper {
+  flex: 1 1 0px;
+  min-height: 0px;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+.leftSection {
+  flex: 0 0 300px;
+}
+
+.rightSection {
+  flex: 1 1 0px;
+  min-width: 0px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+}
+
+.contentCanvasWrapper {
+  flex: 1 1 0px;
+  min-height: 0px;
+  position: relative;
+  overflow: auto;
+}
+.propertySection {
+  flex: 0 0 auto;
+}
+.propertySection_body {
+  height: 270px;
+  overflow: auto;
+}

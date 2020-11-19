@@ -34,5 +34,5 @@
     ".prettierrc.js",
     "jest.config.js"
   ],
-  "exclude": ["node_modules", "build", "dist", "scripts", "src/.umi/*", "webpack", "jest"]
+  "exclude": ["**/node_modules/*", "**/public/*", "build", "dist", "scripts", "src/.umi/*", "webpack", "jest"]
 }
