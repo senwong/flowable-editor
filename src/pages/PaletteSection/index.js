@@ -1,15 +1,10 @@
 import React, { useCallback, useRef, useState } from 'react'
 import { Collapse } from 'antd';
+import './index.css';
 
 const { Panel } = Collapse;
 
-
-
-
-
-export default ({ className, style, startDragCallback, dragCallback, stencilItemGroups }) => {
-
-
+export default function PalletteSection({ className, style, startDragCallback, dragCallback, stencilItemGroups }) {
   return  (
     <div className={className} style={style}>
         <Collapse>
@@ -17,7 +12,12 @@ export default ({ className, style, startDragCallback, dragCallback, stencilItem
           <Panel key={stencilItemGroup.name} header={stencilItemGroup.name}>
             {
              stencilItemGroup.items.map(item => (
-              <p draggable onDrag={dragCallback} onDragStart={startDragCallback} key={item.id} id={item.id}>{item.name}</p>
+              <p key={item.id} id={item.id}>
+
+                <span className='stencilItem' style={{ backgroundImage: `url(${item.icon})`}} draggable onDrag={dragCallback} onDragStart={startDragCallback} id={item.id} icon={item.icon}>
+                  {item.name}
+                </span>
+              </p>
              ))
             }
           </Panel>

@@ -42,6 +42,11 @@ export default defineConfig({
       redirect: '/FlowableEditor',
     },
     {
+      path: '/iframe-test',
+      layout: false,
+      component: './iframe-test',
+    },
+    {
       component: './404',
     },
   ],

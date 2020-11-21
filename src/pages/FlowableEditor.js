@@ -438,13 +438,13 @@ export default function FlowableEditor() {
     const data = stencilData;
     if (!data) return [];
 
-    let quickMenuDefinition = undefined;
-    let ignoreForPaletteDefinition = undefined;
+    let quickMenuDefinition;
+    let ignoreForPaletteDefinition;
 
-    if (data.namespace == 'http://b3mn.org/stencilset/cmmn1.1#') {
+    if (data.namespace === 'http://b3mn.org/stencilset/cmmn1.1#') {
       quickMenuDefinition = ['HumanTask', 'Association'];
       ignoreForPaletteDefinition = ['CasePlanModel'];
-    } else if (data.namespace == 'http://b3mn.org/stencilset/dmn1.2#') {
+    } else if (data.namespace === 'http://b3mn.org/stencilset/dmn1.2#') {
       quickMenuDefinition = [
         'DecisionTableDecision',
         'InformationRequirement',
@@ -500,7 +500,7 @@ export default function FlowableEditor() {
         removed = true;
       }
 
-      let currentGroup = undefined;
+      let currentGroup;
       if (!removed) {
         // Check if this group already exists. If not, we create a new one
 
@@ -1215,6 +1215,61 @@ export default function FlowableEditor() {
     }
   };
 
+  const oryxEditPlugin = useRef();
+
+  function  deleteItem() {
+    if (!oryxEditPlugin.current) {
+      oryxEditPlugin.current = new ORYX.Plugins.Edit(editorManager.getEditor())
+    }
+    oryxEditPlugin.current.editDelete();
+  }
+
+  function quickAddItem(newItemId) {
+
+    const shapes = editorManager.getSelection();
+    if (shapes && shapes.length === 1) {
+      const currentSelectedShape = shapes.first();
+
+      let containedStencil;
+      const stencilSets = editorManager.getStencilSets().values();
+      for (let i = 0; i < stencilSets.length; i++) {
+        const stencilSet = stencilSets[i];
+        const nodes = stencilSet.nodes();
+        for (let j = 0; j < nodes.length; j++) {
+          if (nodes[j].idWithoutNs() === newItemId) {
+                containedStencil = nodes[j];
+              break;
+          }
+        }
+      }
+
+      if (!containedStencil) return;
+
+      const option = {
+        type: currentSelectedShape.getStencil().namespace() + newItemId,
+        namespace: currentSelectedShape.getStencil().namespace(),
+        connectedShape: currentSelectedShape,
+        parent: currentSelectedShape.parent,
+        containedStencil,
+      };
+
+
+      const args = { sourceShape: currentSelectedShape, targetStencil: containedStencil };
+      const targetStencil = editorManager.getRules().connectMorph(args);
+
+      // Check if there can be a target shape
+      if (!targetStencil) {
+        return;
+      }
+
+      option.connectingType = targetStencil.id();
+
+      const command = new FLOWABLE.CreateCommand(option, undefined, undefined, editorManager.getEditor());
+
+      editorManager.executeCommands([command]);
+    }
+  }
+
   return (
     <>
       <div className='pageWrapper'>
@@ -1239,7 +1294,7 @@ export default function FlowableEditor() {
                 <div id="canvasHelpWrapper" className="col-xs-12">
                   <div className="canvas-wrapper" id="canvasSection">
                     <div className="canvas-message" id="model-modified-date"></div>
-                    <div className="Oryx_button" id="delete-button" style={{ display: 'none'}}>
+                    <div className="Oryx_button" id="delete-button" style={{ display: 'none'}} onClick={deleteItem}>
                       <DeleteIcon />
                     </div>
                     <div className="Oryx_button" id="morph-button" style={{ display: 'none'}}>
@@ -1255,6 +1310,7 @@ export default function FlowableEditor() {
                         id={item.id}
                         title={item.description}
                         style={{ display: 'none'}}
+                        onClick={() => quickAddItem(item.id)}
                       >
                         {QuickMenuIconMap[item.id]}
                       </div>

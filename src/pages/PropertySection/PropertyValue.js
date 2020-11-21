@@ -3,6 +3,7 @@ import AssignmentDisplayTemplate from './components/AssignmentDisplayTemplate';
 import AssignmentWriteTemplate from './components/AssignmentWriteTemplate';
 import BooleanPropertyTemplate from './components/boolean-property-template';
 import DefaultValueDisplay from './components/DefaultValueDisplay';
+import MultiinstancePropertyWriteTemplate from './components/MultiinstancePropertyWriteTemplate';
 import ProcessHistorylevelPropertyWriteTemplate from './components/ProcessHistorylevelPropertyWriteTemplate';
 import StringPropertyWriteMode from './components/StringPropertyWriteMode'
 import TextPropertyWriteTemplate from './components/TextPropertyWriteTemplate'
@@ -76,7 +77,7 @@ const map = {
   'editor-app/configuration/properties/message-definitions-popup.html': null,
   'editor-app/configuration/properties/message-definitions-write-template.html': null,
   'editor-app/configuration/properties/message-property-write-template.html': null,
-  'editor-app/configuration/properties/multiinstance-property-write-template.html': null,
+  'editor-app/configuration/properties/multiinstance-property-write-template.html': MultiinstancePropertyWriteTemplate,
   'editor-app/configuration/properties/ordering-property-write-template.html': null,
   'editor-app/configuration/properties/out-parameters-display-template.html': null,
   'editor-app/configuration/properties/out-parameters-popup.html': null,

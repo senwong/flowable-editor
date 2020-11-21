@@ -330,14 +330,15 @@ export default function PropertySection({ ORYXEDITORLOADED }) {
               xxl={{ span: 8 }}
             >
               <Form.Item
-                onClick={() => propertyClicked(index)}
                 label={property.title + (property.hidden ? '(已删除)' : '')}
               >
-                <PropertyValue
-                  key={property.id}
-                  property={property}
-                  onSave={(p) => onSaveProperty(p, index)}
-                />
+                <span style={{ minWidth: 200, minHeight: '2em', display: 'inline-block' }} onClick={() => property.mode === 'read' && propertyClicked(index)}>
+                  <PropertyValue
+                    key={property.id}
+                    property={property}
+                    onSave={(p) => onSaveProperty(p, index)}
+                  />
+                </span>
               </Form.Item>
             </Col>
           ))}
